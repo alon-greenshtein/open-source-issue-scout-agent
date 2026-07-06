@@ -8,6 +8,9 @@ the same function signatures, so filter.py/main.py don't need to change.
 import os
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 GITHUB_API = "https://api.github.com"
 

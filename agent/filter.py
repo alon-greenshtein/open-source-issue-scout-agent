@@ -1,17 +1,26 @@
 """Deterministic filtering + ranking of open issues (no LLM involved).
 
-This runs before any LLM call so the expensive/judgment-requiring step
-(scoring_agent.py) only ever sees a short, pre-cleaned shortlist.
+Drops: assigned issues, locked issues, issues already referenced by an
+open PR's "closes/fixes/resolves #N" text.
+Ranks by: label match to experience_level, then most recently updated,
+then comment count (light tie-breaker only, not a strong signal).
+This runs before any LLM call so scoring_agent.py only ever sees a
+short, pre-cleaned shortlist.
 """
 
 import re
 from datetime import datetime, timezone
 
-BEGINNER_LABELS = {"good first issue", "good-first-issue", "beginner", "easy", "help wanted"}
-INTERMEDIATE_LABELS = {"intermediate", "medium"}
-ADVANCED_LABELS = {"advanced", "hard", "hard difficulty"}
+LABELS_BY_EXPERIENCE = {
+    "beginner": {
+        "good first issue", "good-first-issue", "beginner", "easy",
+        "help wanted", "documentation", "docs",
+    },
+    "intermediate": {"intermediate", "medium"},
+    "advanced": {"advanced", "hard", "hard difficulty"},
+}
 
-_CLOSES_PATTERN = re.compile(
+ISSUE_CLOSING_PATTERN = re.compile(
     r"\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)",
     re.IGNORECASE,
 )
@@ -21,7 +30,7 @@ def extract_linked_issue_numbers(pr_body: str | None) -> set[int]:
     """Issue numbers a PR body claims to close/fix/resolve."""
     if not pr_body:
         return set()
-    return {int(match.group(2)) for match in _CLOSES_PATTERN.finditer(pr_body)}
+    return {int(match.group(2)) for match in ISSUE_CLOSING_PATTERN.finditer(pr_body)}
 
 
 def _label_names(issue: dict) -> set[str]:
@@ -31,14 +40,12 @@ def _label_names(issue: dict) -> set[str]:
     }
 
 
-def _label_match_bonus(issue: dict, experience_level: str) -> int:
-    labels = _label_names(issue)
-    target = {
-        "beginner": BEGINNER_LABELS,
-        "intermediate": INTERMEDIATE_LABELS,
-        "advanced": ADVANCED_LABELS,
-    }.get(experience_level, set())
-    return 1 if labels & target else 0
+def _is_assigned(issue: dict) -> bool:
+    return bool(issue.get("assignees")) or bool(issue.get("assignee"))
+
+
+def _matched_labels(issue: dict, experience_level: str) -> set[str]:
+    return _label_names(issue) & LABELS_BY_EXPERIENCE.get(experience_level, set())
 
 
 def _updated_at(issue: dict) -> datetime:
@@ -48,19 +55,24 @@ def _updated_at(issue: dict) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
+def _filter_reasons(issue: dict, matched_labels: set[str]) -> list[str]:
+    """Human-readable reasons this issue survived, for report.py/README."""
+    reasons = []
+    if matched_labels:
+        reasons.append(f"label match: {', '.join(sorted(matched_labels))}")
+    days_ago = (datetime.now(timezone.utc) - _updated_at(issue)).days
+    reasons.append(f"updated {days_ago} day{'s' if days_ago != 1 else ''} ago")
+    reasons.append(f"{issue.get('comments', 0)} comment(s)")
+    return reasons
+
+
 def filter_candidates(
     issues: list[dict],
     pull_requests: list[dict],
     experience_level: str = "beginner",
     max_candidates: int = 15,
 ) -> list[dict]:
-    """Drop noise, rank what's left, return the top N survivors.
-
-    Dropped: assigned issues, locked issues, issues already referenced
-    by an open PR's "closes #N" (or fixes/resolves) text.
-    Ranking: label match to experience_level first, then fewer comments
-    (likely still unclaimed discussion), then most recently updated.
-    """
+    """Return the top N survivors as {"issue": ..., "filter_reasons": [...]} dicts."""
     linked_issue_numbers: set[int] = set()
     for pr in pull_requests:
         linked_issue_numbers |= extract_linked_issue_numbers(pr.get("body"))
@@ -68,17 +80,25 @@ def filter_candidates(
     survivors = [
         issue
         for issue in issues
-        if not issue.get("assignees")
+        if not _is_assigned(issue)
         and not issue.get("locked")
         and issue.get("number") not in linked_issue_numbers
     ]
 
-    survivors.sort(
-        key=lambda issue: (
-            -_label_match_bonus(issue, experience_level),
-            issue.get("comments", 0),
-            -_updated_at(issue).timestamp(),
-        )
-    )
+    labeled = [(issue, _matched_labels(issue, experience_level)) for issue in survivors]
 
-    return survivors[:max_candidates]
+    """Sorting priority: label match, recency, then comments."""
+    def sort_key(pair: tuple[dict, set[str]]):
+        issue, matched = pair
+        return (
+            -len(matched),
+            -_updated_at(issue).timestamp(),
+            issue.get("comments", 0),
+        )
+
+    labeled.sort(key=sort_key)
+
+    return [
+        {"issue": issue, "filter_reasons": _filter_reasons(issue, matched)}
+        for issue, matched in labeled[:max_candidates]
+    ]
