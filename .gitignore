@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 .vscode/
+
+# too large for GitHub (>100MB) — kept locally, referenced only in the video/writeup
+media/submission-video.mp4
+
+# internal working notes, not meant for the public repo
+internal-notes/
