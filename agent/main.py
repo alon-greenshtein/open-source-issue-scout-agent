@@ -2,7 +2,12 @@ import argparse
 import sys
 from dataclasses import dataclass
 
-from agent.fetch import get_issue_comments, get_open_issues, get_open_pull_requests
+from agent.mcp_client import (
+    close_mcp_client,
+    get_issue_comments,
+    get_open_issues,
+    get_open_pull_requests,
+)
 from agent.filter import filter_candidates
 from agent.rank import rank_scores
 from agent.report import generate_markdown_report
@@ -97,18 +102,23 @@ def _score_candidates(config: Config, candidates: list[dict]) -> list[dict]:
 # The full agent pipeline: fetch -> filter -> score (per candidate) -> rank
 # -> report. Deterministic filtering/ranking bracket the single LLM step in
 # the middle; nothing here re-implements logic that lives in those modules.
+# The fetch calls go through mcp_client, which holds one MCP session open for
+# the whole run — so it's closed in finally, even if a later step raises.
 def scout(config: Config) -> str:
-    _log(f"Fetching open issues and PRs for {config.owner}/{config.repo}...")
-    issues = get_open_issues(config.owner, config.repo)
-    pull_requests = get_open_pull_requests(config.owner, config.repo)
-    _log(f"  {len(issues)} open issues, {len(pull_requests)} open PRs.")
+    try:
+        _log(f"Fetching open issues and PRs for {config.owner}/{config.repo}...")
+        issues = get_open_issues(config.owner, config.repo)
+        pull_requests = get_open_pull_requests(config.owner, config.repo)
+        _log(f"  {len(issues)} open issues, {len(pull_requests)} open PRs.")
 
-    candidates = filter_candidates(issues, pull_requests, config.experience_level, config.max_candidates)
-    _log(f"Filtered to {len(candidates)} candidate(s); scoring with the LLM...")
+        candidates = filter_candidates(issues, pull_requests, config.experience_level, config.max_candidates)
+        _log(f"Filtered to {len(candidates)} candidate(s); scoring with the LLM...")
 
-    scored = _score_candidates(config, candidates)
-    ranked = rank_scores(scored, config.experience_level)
-    return generate_markdown_report(config.owner, config.repo, ranked)
+        scored = _score_candidates(config, candidates)
+        ranked = rank_scores(scored, config.experience_level)
+        return generate_markdown_report(config.owner, config.repo, ranked)
+    finally:
+        close_mcp_client()
 
 
 def main() -> None:
