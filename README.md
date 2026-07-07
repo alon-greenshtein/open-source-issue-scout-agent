@@ -2,6 +2,8 @@
 
 **An AI agent that triages open-source GitHub issues so a contributor can find one that actually fits them — not just a pile of "good first issue" links.**
 
+**TL;DR:** Given a GitHub repository, the agent analyzes its open issues and recommends the five best contribution opportunities for a developer at a chosen experience level.
+
 This repository is my capstone submission for the Google & Kaggle *AI Agents: Intensive Vibe Coding* course. It was developed inside **Google's Antigravity IDE**, following the agent-development workflow taught in the course.
 
 ## The problem
@@ -78,6 +80,14 @@ rank.py             Deterministic, LLM-independent, pure Python. Lexicographic s
 report.py           Pure Markdown rendering of the top N. Does not sort or filter anything itself.
 ```
 
+## Deterministic vs. LLM: exactly where the line is drawn
+
+This is the one decision repeated at every layer of the pipeline above, so it's worth being explicit about it:
+
+- **`filter.py` (deterministic)**: an issue is dropped if it's assigned, locked, or textually referenced by an open PR's "closes #N" — facts you can check with a regex and a dict lookup, no judgment involved.
+- **`scoring_agent.py` (LLM)**: is the issue *actually* clear, hard, or already spoken for in the comments? Facts like "clear" or "hard" only exist by reading prose — no regex can tell you that "help wanted, but only if you already know our test setup" makes something intermediate despite the label.
+- **`rank.py` (deterministic, again)**: once the LLM has scored each candidate, combining those scores into a final order is arithmetic again, not judgment — so it's plain Python, unit-tested, and independent of the LLM being asked to also rank between issues it never even saw side-by-side (which isn't something an isolated per-issue call can even do correctly).
+
 ## Course concepts demonstrated
 
 The capstone rubric asks for at least 3 of the course's key concepts. This project demonstrates:
@@ -100,14 +110,6 @@ The pipeline's only source of GitHub data is the **official** `github-mcp-server
 
 One non-obvious integration detail: GitHub's official server's `list_issues` tool returns a minimized GraphQL-shaped object missing fields `filter.py` needs (`assignee`, `locked`, `html_url`), so this project uses `search_issues` instead, which returns the full REST-shaped `Issue` object — meaning `filter.py`/`rank.py`/`report.py` needed no changes to work with either transport.
 
-## Deterministic vs. LLM: exactly where the line is drawn
-
-This is the one decision repeated at every layer of the pipeline, so it's worth being explicit about it:
-
-- **`filter.py` (deterministic)**: an issue is dropped if it's assigned, locked, or textually referenced by an open PR's "closes #N" — facts you can check with a regex and a dict lookup, no judgment involved.
-- **`scoring_agent.py` (LLM)**: is the issue *actually* clear, hard, or already spoken for in the comments? Facts like "clear" or "hard" only exist by reading prose — no regex can tell you that "help wanted, but only if you already know our test setup" makes something intermediate despite the label.
-- **`rank.py` (deterministic, again)**: once the LLM has scored each candidate, combining those scores into a final order is arithmetic again, not judgment — so it's plain Python, unit-tested, and independent of the LLM being asked to also rank between issues it never even saw side-by-side (which isn't something an isolated per-issue call can even do correctly).
-
 ## Project structure
 
 ```
@@ -127,14 +129,24 @@ examples/            real end-to-end output against live repos
 
 The agent is intentionally a local CLI — no hosted endpoint to stand up. It can be cloned and run anywhere with Docker and two API keys, which keeps it trivially reproducible for judging.
 
-Requirements: Python 3.11+, Docker Desktop **running** (the official GitHub MCP server is launched as a Docker subprocess), a GitHub personal access token (`public_repo` scope is enough for public repos), and a Gemini API key ([aistudio.google.com](https://aistudio.google.com)).
+**Requirements:**
+- Python 3.11+
+- Docker Desktop, **running** (no manual `docker run` needed — the agent starts the official GitHub MCP server automatically as a subprocess; you only need to pull the image once, see below)
+- A GitHub personal access token (`public_repo` scope is enough for public repos)
+- A Gemini API key ([aistudio.google.com](https://aistudio.google.com))
 
 ```bash
+git clone https://github.com/alon-greenshtein/open-source-issue-scout-agent.git
+cd open-source-issue-scout-agent
 pip install -r requirements.txt
 docker pull ghcr.io/github/github-mcp-server
 ```
 
-Create a `.env` file in the project root (never committed — see `.gitignore`):
+Copy the example env file and fill in your keys (`.env` is git-ignored, never committed):
+
+```bash
+cp .env.example .env
+```
 
 ```
 GITHUB_TOKEN=ghp_...
@@ -147,7 +159,7 @@ GEMINI_API_KEY=...
 python -m agent.main <owner>/<repo> <beginner|intermediate|advanced>
 ```
 
-Progress logs go to stderr; the Markdown report is the only thing on stdout, so it can be redirected straight to a file:
+Output: progress logs go to stderr; the Markdown report is the only thing on stdout, so it can be redirected straight to a file:
 
 ```bash
 python -m agent.main hasadna/open-bus-map-search beginner > examples/open-bus-map-search-beginner.md
@@ -183,6 +195,10 @@ problem is clearly defined with specific action items, making it approachable.
 ```
 
 Note that `difficulty` here is the scoring agent's own read of the issue text, independent of whatever label (if any) the issue happens to carry on GitHub — the whole reason to have an LLM in the loop instead of only filtering on labels.
+
+For comparison, here's that same issue (#1203) as it actually appears on the source repo's issue tracker — real, currently open, and not a curated or invented example:
+
+![Issue #1203 as it appears on the real GitHub repo](examples/demo-source-issue.png)
 
 ## Tests
 
