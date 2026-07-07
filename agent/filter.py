@@ -1,16 +1,23 @@
-"""Deterministic filtering + ranking of open issues (no LLM involved).
-
-Drops: assigned issues, locked issues, issues already referenced by an
-open PR's "closes/fixes/resolves #N" text.
-Ranks by: label match to experience_level, then most recently updated,
-then comment count (light tie-breaker only, not a strong signal).
-This runs before any LLM call so scoring_agent.py only ever sees a
-short, pre-cleaned shortlist.
-"""
+# Deterministic filtering + ranking of open issues (no LLM involved).
+#
+# Drops: assigned issues, locked issues, issues already referenced by an
+# open PR's "closes/fixes/resolves #N" text.
+# Ranks by: label match to experience_level, then most recently updated,
+# then comment count (light tie-breaker only, not a strong signal).
+# This runs before any LLM call so scoring_agent.py only ever sees a
+# short, pre-cleaned shortlist.
 
 import re
 from datetime import datetime, timezone
 
+# "intermediate"/"advanced" labels are rarely used in practice across GitHub
+# repos (no widely-adopted convention like "good first issue" exists for
+# them), so for those levels this dict mostly won't match anything and the
+# ranking below falls back to recency/comments alone. That's fine: the final
+# difficulty fit is corrected later in rank.py, using the LLM's real
+# assessment of the issue text — not GitHub labels. This dict only affects
+# which ~15 candidates get sent to the LLM in the first place, not the final
+# top-5 shown to the user.
 LABELS_BY_EXPERIENCE = {
     "beginner": {
         "good first issue", "good-first-issue", "beginner", "easy",
@@ -26,8 +33,8 @@ ISSUE_CLOSING_PATTERN = re.compile(
 )
 
 
+# Issue numbers a PR body claims to close/fix/resolve.
 def extract_linked_issue_numbers(pr_body: str | None) -> set[int]:
-    """Issue numbers a PR body claims to close/fix/resolve."""
     if not pr_body:
         return set()
     return {int(match.group(2)) for match in ISSUE_CLOSING_PATTERN.finditer(pr_body)}
@@ -48,31 +55,32 @@ def _matched_labels(issue: dict, experience_level: str) -> set[str]:
     return _label_names(issue) & LABELS_BY_EXPERIENCE.get(experience_level, set())
 
 
-def _updated_at(issue: dict) -> datetime:
+def updated_at(issue: dict) -> datetime:
     raw = issue.get("updated_at")
     if not raw:
         return datetime.min.replace(tzinfo=timezone.utc)
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
+# Human-readable reasons this issue survived, fed to the scoring prompt
+# (scoring_agent.py) as context for why it made the shortlist.
 def _filter_reasons(issue: dict, matched_labels: set[str]) -> list[str]:
-    """Human-readable reasons this issue survived, for report.py/README."""
     reasons = []
     if matched_labels:
         reasons.append(f"label match: {', '.join(sorted(matched_labels))}")
-    days_ago = (datetime.now(timezone.utc) - _updated_at(issue)).days
+    days_ago = (datetime.now(timezone.utc) - updated_at(issue)).days
     reasons.append(f"updated {days_ago} day{'s' if days_ago != 1 else ''} ago")
     reasons.append(f"{issue.get('comments', 0)} comment(s)")
     return reasons
 
 
+# Returns the top N survivors as {"issue": ..., "filter_reasons": [...]} dicts.
 def filter_candidates(
     issues: list[dict],
     pull_requests: list[dict],
     experience_level: str = "beginner",
     max_candidates: int = 15,
 ) -> list[dict]:
-    """Return the top N survivors as {"issue": ..., "filter_reasons": [...]} dicts."""
     linked_issue_numbers: set[int] = set()
     for pr in pull_requests:
         linked_issue_numbers |= extract_linked_issue_numbers(pr.get("body"))
@@ -87,12 +95,12 @@ def filter_candidates(
 
     labeled = [(issue, _matched_labels(issue, experience_level)) for issue in survivors]
 
-    """Sorting priority: label match, recency, then comments."""
+    # Sorting priority: label match, recency, then comments.
     def sort_key(pair: tuple[dict, set[str]]):
         issue, matched = pair
         return (
             -len(matched),
-            -_updated_at(issue).timestamp(),
+            -updated_at(issue).timestamp(),
             issue.get("comments", 0),
         )
 
