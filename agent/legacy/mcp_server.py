@@ -1,14 +1,11 @@
 # MCP server exposing this project's GitHub fetch layer as MCP tools.
 #
-# This is a thin transport wrapper: every tool delegates straight to the
-# existing, tested functions in fetch.py — no fetch logic (pagination, the
-# max_issues/max_prs caps, PR filtering) is reimplemented here. Because
-# fetch.py exposes the same three functions main.py expects, swapping MCP
-# back out for direct REST is a one-line import change in main.py
-# (agent.mcp_client -> agent.legacy.fetch). See ROLLBACK.md.
+# Thin transport wrapper: every tool delegates straight to the existing,
+# tested functions in fetch.py — no fetch logic is reimplemented here.
+# Legacy fallback (not used by the main pipeline, which talks to the
+# official GitHub MCP server instead — see agent/mcp_client.py).
 #
-# Run as: python -m agent.legacy.mcp_server  (stdio transport). Legacy
-# fallback, not used by the main pipeline — see ROLLBACK.md.
+# Run as: python -m agent.legacy.mcp_server (stdio transport).
 
 from mcp.server.fastmcp import FastMCP
 

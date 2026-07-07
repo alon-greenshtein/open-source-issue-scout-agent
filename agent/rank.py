@@ -1,10 +1,5 @@
-# Deterministic final ranking of scored candidates (no LLM involved).
-#
-# filter.py already did a cheap metadata-based pre-ranking to pick which
-# issues were worth spending an LLM call on. That ordering is "spent" once
-# the shortlist is chosen — this module produces a fresh, independent
-# ordering of the issues the LLM actually recommended, using its richer
-# judgments instead of the crude metadata proxies.
+# Deterministic final ranking of scored candidates (no LLM involved). See README's
+# "Deterministic vs. LLM" section for why this is a separate, LLM-independent step.
 #
 # Sort priority (lexicographic, most-significant first):
 #   1. recommended == True   gate: non-recommended candidates are dropped

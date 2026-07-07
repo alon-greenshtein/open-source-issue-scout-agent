@@ -1,27 +1,14 @@
-# MCP client: talks to the official GitHub MCP server
-# (ghcr.io/github/github-mcp-server, run as a Docker subprocess over stdio)
-# and exposes the same three functions as fetch.py with the same signatures,
-# so main.py stays agnostic to how the data is fetched.
+# MCP client: talks to the official GitHub MCP server (ghcr.io/github/github-mcp-server,
+# Docker subprocess over stdio). Exposes the same three functions/signatures the legacy
+# fetch.py did, so main.py stays agnostic to the transport. See README for why MCP / why
+# the official server instead of a hand-rolled one.
 #
-# Why this shape: the project's course requirement is to use MCP. Rather than
-# wrap our own REST code in a home-grown MCP server (that path still exists —
-# see agent/legacy/mcp_server.py — and is the level-2 fallback in ROLLBACK.md),
-# the client here speaks to GitHub's real MCP server. The server returns issue/PR
-# JSON in the same field shape as GitHub's REST API (verified live), so the
-# deterministic pipeline below it (filter.py, rank.py, report.py) is unchanged.
+# Tool mapping: get_open_issues -> search_issues, get_open_pull_requests -> list_pull_requests,
+# get_issue_comments -> issue_read(method="get_comments").
 #
-# Tool mapping (fetch.py -> official MCP tool):
-#   get_open_issues         -> search_issues   (query "is:issue is:open no:assignee")
-#   get_open_pull_requests  -> list_pull_requests
-#   get_issue_comments      -> issue_read (method="get_comments")
-#
-# Why the threading machinery: the MCP client SDK is async and a session owns
-# a live subprocess (the Docker container) plus background stream tasks that
-# must stay alive between calls. One scout() run makes several search/list
-# pages plus up to 15 comment fetches, so we keep ONE session (one container)
-# open for the whole run: a dedicated asyncio loop runs in a background thread
-# and each tool call is dispatched onto it. The session is created lazily on
-# first use and torn down once via close_mcp_client().
+# One MCP session (one Docker container) is kept open for the whole run via a background
+# event loop + queue, dispatched through _MCPBridge below — see that class for why a
+# per-call asyncio task doesn't work here.
 
 import asyncio
 import concurrent.futures

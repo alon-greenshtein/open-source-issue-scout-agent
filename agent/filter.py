@@ -10,14 +10,10 @@
 import re
 from datetime import datetime, timezone
 
-# "intermediate"/"advanced" labels are rarely used in practice across GitHub
-# repos (no widely-adopted convention like "good first issue" exists for
-# them), so for those levels this dict mostly won't match anything and the
-# ranking below falls back to recency/comments alone. That's fine: the final
-# difficulty fit is corrected later in rank.py, using the LLM's real
-# assessment of the issue text — not GitHub labels. This dict only affects
-# which ~15 candidates get sent to the LLM in the first place, not the final
-# top-5 shown to the user.
+# "intermediate"/"advanced" labels have no widely-adopted GitHub convention, so this
+# dict mostly won't match for those levels — ranking falls back to recency/comments.
+# That's fine: this only affects which ~15 candidates reach the LLM, not the final
+# top-5 (rank.py corrects difficulty fit using the LLM's own read of the issue text).
 LABELS_BY_EXPERIENCE = {
     "beginner": {
         "good first issue", "good-first-issue", "beginner", "easy",

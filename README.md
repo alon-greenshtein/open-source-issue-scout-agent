@@ -14,11 +14,11 @@ This repository is my capstone submission for the Google & Kaggle *AI Agents: In
 
 Give the agent a `owner/repo` and an experience level (`beginner` / `intermediate` / `advanced`). It fetches the repo's open issues and PRs, throws out the obvious noise with plain code, has an LLM read the *text* of each surviving candidate (not just its labels) to judge clarity/difficulty/claim-status, and hands back a ranked top-5 as a Markdown report — each entry with a plain-English summary, an honest difficulty estimate, and a warning if someone else already seems to be working on it.
 
-**Core design principle, followed everywhere in this codebase**: the LLM is used only where reading and interpreting free text is genuinely required. Every filtering, merging, sorting, and gate-keeping decision is deterministic Python — not because the LLM couldn't do it, but because a rule you can point to in code is one you can trust and debug, and an LLM asked to do it will silently drift between runs.
+**Core design principle, followed everywhere in this codebase**: the LLM is used only where reading and interpreting free text is genuinely required; everything else is deterministic Python (see *Deterministic vs. LLM* below for exactly where that line is drawn).
 
 ## Why an AI agent?
 
-A static script can throw out issues that are assigned or locked — that's a metadata check. It cannot tell you whether an issue is *actually* beginner-friendly once you read the discussion, or whether someone informally claimed it three comments deep ("I'll take a look tomorrow"). That's a language-understanding judgment, made independently per issue, which is exactly the kind of task an LLM agent is suited for — and exactly the kind of task that shouldn't be trusted to do the deterministic bookkeeping around it (dedup, sorting, gating) that plain code already does reliably.
+A static script can drop issues that are assigned or locked — a metadata check. It can't tell you whether an issue is *actually* beginner-friendly once you read the discussion, or whether someone informally claimed it in a comment. That's a language-understanding judgment, which is exactly what an LLM agent is suited for.
 
 ## Architecture
 
@@ -52,41 +52,15 @@ A static script can throw out issues that are assigned or locked — that's a me
                           (Markdown top-5 report)
 ```
 
-```
-mcp_client.py       Talks to the official GitHub MCP server (ghcr.io/github/github-mcp-server,
-                    run as a Docker subprocess over stdio) — search_issues / list_pull_requests /
-                    issue_read. One MCP session per run, held open across all calls.
-      |
-filter.py           Deterministic. Drops assigned issues, locked issues, and issues an open PR
-                    already claims to close/fix. Pre-ranks the survivors by label match ->
-                    recency -> comment count and keeps the top ~15 — just enough to bound the
-                    number of LLM calls per run, not a quality judgment.
-      |
-scoring_agent.py    One Google ADK LlmAgent (Gemini) call per surviving candidate, independently.
-                    Structured output (Pydantic schema) forces the model to return: clarity_score,
-                    difficulty, likely_files, claim_status + claim_evidence, problem_summary,
-                    value_explanation, recommended. No candidate ever sees another candidate's
-                    issue, so nothing it says can be "the 5th one had a typo, this one didn't."
-      |
-main.py             Orchestration only: fetch -> filter -> score each candidate (with per-issue
-                    try/except so one bad issue can't sink the run) -> rank -> render.
-      |
-rank.py             Deterministic, LLM-independent, pure Python. Lexicographic sort (not a
-                    weighted score) over: recommended gate -> difficulty fit for the requested
-                    experience level -> claim_status -> clarity -> recency. Lexicographic on
-                    purpose: a weighted sum would let a high clarity score paper over an issue
-                    that's flatly too hard, which is the one thing a beginner can't route around.
-      |
-report.py           Pure Markdown rendering of the top N. Does not sort or filter anything itself.
-```
+**Pipeline summary:** Fetch → Filter → LLM Score → Rank → Markdown Report.
 
 ## Deterministic vs. LLM: exactly where the line is drawn
 
 This is the one decision repeated at every layer of the pipeline above, so it's worth being explicit about it:
 
-- **`filter.py` (deterministic)**: an issue is dropped if it's assigned, locked, or textually referenced by an open PR's "closes #N" — facts you can check with a regex and a dict lookup, no judgment involved.
-- **`scoring_agent.py` (LLM)**: is the issue *actually* clear, hard, or already spoken for in the comments? Facts like "clear" or "hard" only exist by reading prose — no regex can tell you that "help wanted, but only if you already know our test setup" makes something intermediate despite the label.
-- **`rank.py` (deterministic, again)**: once the LLM has scored each candidate, combining those scores into a final order is arithmetic again, not judgment — so it's plain Python, unit-tested, and independent of the LLM being asked to also rank between issues it never even saw side-by-side (which isn't something an isolated per-issue call can even do correctly).
+- **`filter.py` (deterministic)**: an issue is dropped if it's assigned, locked, or textually referenced by an open PR's "closes #N" — facts you can check with a regex and a dict lookup, no judgment involved. Just enough is pre-ranked and kept (top ~15) to bound the number of LLM calls per run — this is resource management, not a quality judgment.
+- **`scoring_agent.py` (LLM)**: is the issue *actually* clear, hard, or already spoken for in the comments? Facts like "clear" or "hard" only exist by reading prose — no regex can tell you that "help wanted, but only if you already know our test setup" makes something intermediate despite the label. Each candidate is scored in complete isolation — no candidate ever sees another candidate's issue — so nothing it says can be skewed by whatever else happened to be in the shortlist that run.
+- **`rank.py` (deterministic, again)**: once the LLM has scored each candidate, combining those scores into a final order is arithmetic again, not judgment — so it's plain Python, unit-tested, and independent of the LLM being asked to also rank between issues it never even saw side-by-side. The sort is lexicographic, not a weighted sum, on purpose: a weighted score would let a high clarity rating paper over an issue that's flatly too hard, which is the one thing a beginner can't route around.
 
 ## Course concepts demonstrated
 
